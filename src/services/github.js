@@ -1,13 +1,17 @@
 'use strict';
 
 const { Octokit } = require('@octokit/rest');
+const { createAppAuth } = require('@octokit/auth-app');
 const { loadRuntimeConfig } = require('../config');
 
 let _octokit = null;
 function getOctokit() {
   if (!_octokit) {
-    const { githubToken } = loadRuntimeConfig();
-    _octokit = new Octokit({ auth: githubToken });
+    const { appId, privateKey, installationId } = loadRuntimeConfig();
+    _octokit = new Octokit({
+      authStrategy: createAppAuth,
+      auth: { appId, privateKey, installationId },
+    });
   }
   return _octokit;
 }

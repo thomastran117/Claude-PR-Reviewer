@@ -8,10 +8,14 @@ const port = rawPort ? parseInt(rawPort, 10) : 3000;
 // Validate business-logic env vars and return them, or return an error string.
 // Called lazily so the server can always start and pass the /health check.
 function loadRuntimeConfig() {
-  const githubToken = process.env.GITHUB_TOKEN;
-  if (!githubToken) {
-    return { error: 'Missing required env var: GITHUB_TOKEN' };
-  }
+  const appId = process.env.GITHUB_APP_ID;
+  if (!appId) return { error: 'Missing required env var: GITHUB_APP_ID' };
+
+  const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
+  if (!privateKey) return { error: 'Missing required env var: GITHUB_APP_PRIVATE_KEY' };
+
+  const installationId = process.env.GITHUB_INSTALLATION_ID;
+  if (!installationId) return { error: 'Missing required env var: GITHUB_INSTALLATION_ID' };
 
   const rawKeys = process.env.ALLOWED_API_KEYS;
   if (!rawKeys) {
@@ -37,7 +41,7 @@ function loadRuntimeConfig() {
     return { error: 'ALLOWED_API_KEYS must contain at least one key' };
   }
 
-  return { githubToken, allowedApiKeys };
+  return { appId, privateKey: privateKey.replace(/\\n/g, '\n'), installationId: parseInt(installationId, 10), allowedApiKeys };
 }
 
 module.exports = { port, version, loadRuntimeConfig };
