@@ -216,7 +216,8 @@ async function postReview(owner, repo, pull_number, headSha, reviewText, inlineC
       });
       posted++;
     } catch (err) {
-      console.warn(`[github] Skipping inline comment on ${c.path}:${c.line} — ${err.message}`);
+      const detail = err.response?.data ? JSON.stringify(err.response.data) : '';
+      console.warn(`[github] Skipping inline comment on ${c.path}:${c.line} — ${err.message}${detail ? ` | ${detail}` : ''}`);
     }
   }
 
