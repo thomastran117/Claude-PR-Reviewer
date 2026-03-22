@@ -1,0 +1,18 @@
+{
+  "name": "claude-pr-review-api",
+  "version": "1.0.0",
+  "description": "REST API for AI-powered PR code review via Claude",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.80.0",
+    "@octokit/rest": "^22.0.1",
+    "express": "^5.2.1"
+  }
+}
