@@ -64,11 +64,14 @@ Then output EXACTLY these sections, in this order:
 
 Only include subsections relevant to what changed in the diff. Choose from:
 
-### React / JavaScript
-Review for: component structure, hook correctness, prop drilling, accessibility (a11y), and patterns suitable for the project stage.
+### Angular
+Review for: module/standalone component structure, OnPush change detection, RxJS subscription management (no unsubscribed observables), proper use of signals vs observables, lazy loading, and Angular-specific security concerns (bypassing DomSanitizer, etc.).
 
-### Node.js / Express
-Review for: async/await correctness, error handling, RESTful API design, and input validation/auth checks.
+### .NET
+Review for: async/await correctness (no `.Result`/`.Wait()` deadlocks), proper use of `IDisposable`/`using`, dependency injection lifetime mismatches (e.g. scoped service in singleton), EF Core query efficiency (N+1, missing AsNoTracking), and input validation/model binding security.
+
+### Node.js (Serverless)
+Review for: cold-start impact (avoid heavy module-level init), correct async/await and error handling, stateless design (no in-memory state between invocations), environment variable handling, and appropriate timeout/memory configuration.
 
 If none of the above stacks are present in the diff, write: `Not applicable for this diff.`
 
