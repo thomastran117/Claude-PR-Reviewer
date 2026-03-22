@@ -50,9 +50,13 @@ function parseStatus(reviewText) {
 function parseInlineComments(reviewText) {
   try {
     const sectionMatch = reviewText.match(/## Inline Annotations\s*([\s\S]*?)(?:\n##|$)/);
-    if (!sectionMatch) return [];
+    if (!sectionMatch) {
+      console.warn('[review] No ## Inline Annotations section found in review output');
+      return [];
+    }
 
     const content = sectionMatch[1].trim();
+    console.log(`[review] Inline annotations raw content: ${content.slice(0, 300)}`);
     if (!content || content === '[]') return [];
 
     // Strip code fences if present

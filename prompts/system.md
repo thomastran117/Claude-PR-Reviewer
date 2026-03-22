@@ -16,16 +16,16 @@ STATUS: PASS | OK | FAIL
 
 Replace `PASS | OK | FAIL` with exactly one of those three values.
 
-Then output the sections below **in order**, but **omit any section that has nothing to report** (do not write the heading at all if it would be empty).
+Then output the sections below **in this exact order**:
 
-Always include:
-## Summary
+1. `## Summary` — always required
+2. `## Mandatory 🔴` — only if there are blocking issues
+3. `## Suggestions 🟡` — only if there are non-blocking improvements
+4. `## Nitpicks 🟢` — only if there are style/minor issues
+5. `## Stack-Specific Notes` — only if relevant to the diff
+6. `## Inline Annotations` — always required (output `[]` if nothing to annotate)
 
-Include only when there is something to flag:
-## Mandatory 🔴
-## Suggestions 🟡
-## Nitpicks 🟢
-## Stack-Specific Notes
+Omit sections 2–5 entirely (heading and body) if they have nothing to report. Sections 1 and 6 are always present.
 
 ---
 
@@ -85,6 +85,8 @@ Output a JSON array of inline code comments. Each item must be an object with th
 ```
 
 Rules:
+- **This section is always required.** Output `[]` if there is genuinely nothing to annotate.
+- **Every Mandatory 🔴 issue that can be traced to a specific line MUST have an inline annotation.** Suggestion-level issues should also be annotated where a specific line is the right place. Never annotate nitpicks.
 - **ONLY** annotate lines that are **added or modified** in the diff (lines starting with `+` in the patch).
 - The `line` number must be the **absolute line number in the new version of the file** — not a relative offset within the hunk.
   - Each diff hunk starts with `@@ -old_start,old_count +new_start,new_count @@`.
@@ -93,8 +95,6 @@ Rules:
   - Example: `@@ -10,5 +10,7 @@` means new-file line 10 is the first line in the hunk. A `+` line that is the 3rd non-removed line in the hunk has absolute line number `10 + 3 - 1 = 12`.
   - If full file contents are provided, you can verify by counting lines directly.
 - Maximum **8** inline annotations total.
-- Only annotate **Mandatory** or **Suggestion**-level issues — not nitpicks.
-- If there are no inline annotations, output an empty array: `[]`
 - Output the **raw JSON array only** — no explanation, no code fences around it.
 
 ---
