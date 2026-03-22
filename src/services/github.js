@@ -1,9 +1,16 @@
 'use strict';
 
 const { Octokit } = require('@octokit/rest');
-const config = require('../config');
+const { loadRuntimeConfig } = require('../config');
 
-const octokit = new Octokit({ auth: config.githubToken });
+let _octokit = null;
+function getOctokit() {
+  if (!_octokit) {
+    const { githubToken } = loadRuntimeConfig();
+    _octokit = new Octokit({ auth: githubToken });
+  }
+  return _octokit;
+}
 
 const MAX_FILES = 30;
 const MAX_PATCH_CHARS = 20_000;
@@ -42,8 +49,8 @@ async function getPRData(owner, repo, pull_number) {
 
   try {
     [{ data: prMeta }, files] = await Promise.all([
-      octokit.pulls.get({ owner, repo, pull_number }),
-      octokit.paginate(octokit.pulls.listFiles, { owner, repo, pull_number, per_page: 100 }),
+      getOctokit().pulls.get({ owner, repo, pull_number }),
+      getOctokit().paginate(getOctokit().pulls.listFiles, { owner, repo, pull_number, per_page: 100 }),
     ]);
   } catch (err) {
     throw wrapOctokitError(err);
@@ -110,7 +117,7 @@ async function fetchFileContent(owner, repo, file, ref) {
   if (!file.patch && file.status !== 'added' && file.status !== 'modified' && file.status !== 'renamed') return null;
 
   try {
-    const { data } = await octokit.repos.getContent({ owner, repo, path: file.filename, ref });
+    const { data } = await getOctokit().repos.getContent({ owner, repo, path: file.filename, ref });
 
     if (data.type !== 'file' || !data.content || data.encoding !== 'base64') return null;
     if (data.size > MAX_FILE_CONTENT_SIZE) return null;
@@ -135,7 +142,7 @@ async function fetchFileContent(owner, repo, file, ref) {
 async function deletePreviousBotComments(owner, repo, pull_number) {
   let comments;
   try {
-    comments = await octokit.paginate(octokit.issues.listComments, {
+    comments = await getOctokit().paginate(getOctokit().issues.listComments, {
       owner,
       repo,
       issue_number: pull_number,
@@ -150,7 +157,7 @@ async function deletePreviousBotComments(owner, repo, pull_number) {
   for (const c of comments) {
     if (c.body && c.body.includes(MARKER)) {
       try {
-        await octokit.issues.deleteComment({ owner, repo, comment_id: c.id });
+        await getOctokit().issues.deleteComment({ owner, repo, comment_id: c.id });
         deleted++;
       } catch (err) {
         console.warn(`[github] Failed to delete comment ${c.id}:`, err.message);
@@ -179,7 +186,7 @@ async function postReview(owner, repo, pull_number, reviewText, inlineComments) 
 
   // Try with inline comments first; fall back to summary only on validation error
   try {
-    const { data } = await octokit.pulls.createReview({
+    const { data } = await getOctokit().pulls.createReview({
       owner,
       repo,
       pull_number,
@@ -192,7 +199,7 @@ async function postReview(owner, repo, pull_number, reviewText, inlineComments) 
     if (err.status === 422 && comments.length > 0) {
       console.warn('[github] Inline comments rejected (invalid line positions), retrying without them');
       try {
-        const { data } = await octokit.pulls.createReview({
+        const { data } = await getOctokit().pulls.createReview({
           owner,
           repo,
           pull_number,

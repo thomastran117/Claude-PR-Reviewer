@@ -1,6 +1,5 @@
 'use strict';
 
-// Validate env vars before anything else — throws synchronously if invalid
 const config = require('./config');
 
 const express = require('express');
