@@ -46,20 +46,28 @@ router.post('/api/review', auth, async (req, res, next) => {
 
   const shouldPostComment = post_comment === true || post_comment === 'true';
 
+  const pr = `${owner}/${repo}#${pull_number}`;
+  console.log(`[review] start ${pr} user=${req.user.username} post_comment=${shouldPostComment}`);
+
   try {
     // 1. Fetch PR data
+    console.log(`[review] fetching PR data for ${pr}`);
     const prData = await githubService.getPRData(owner, repo, pull_number);
+    console.log(`[review] fetched ${prData.files_reviewed} files, ${prData.total_diff_chars} chars`);
 
     // 2. Build prompt
     const userMessage = reviewService.buildUserPrompt(prData);
 
     // 3. Call Claude
+    console.log(`[review] calling Claude`);
     let reviewText = await claudeService.review(reviewService.SYSTEM_PROMPT, userMessage, anthropic_api_key);
     if (!reviewText) reviewText = reviewService.FALLBACK_REVIEW;
+    console.log(`[review] Claude responded`);
 
     // 4. Parse results
     const status = reviewService.parseStatus(reviewText);
     const inlineComments = reviewService.parseInlineComments(reviewText);
+    console.log(`[review] status=${status} inline_comments=${inlineComments.length}`);
 
     // 5. Optionally post to GitHub
     let commentPosted = false;
@@ -67,13 +75,16 @@ router.post('/api/review', auth, async (req, res, next) => {
     let inlineCommentsPosted = 0;
 
     if (shouldPostComment) {
+      console.log(`[review] posting comment to ${pr}`);
       await githubService.deletePreviousBotComments(owner, repo, pull_number);
       const result = await githubService.postReview(owner, repo, pull_number, reviewText, inlineComments);
       commentPosted = true;
       reviewId = result.review_id;
       inlineCommentsPosted = result.inline_comments_posted;
+      console.log(`[review] posted review_id=${reviewId} inline_comments=${inlineCommentsPosted}`);
     }
 
+    console.log(`[review] done ${pr} duration=${Date.now() - startTime}ms`);
     res.json({
       status,
       review: reviewText,

@@ -10,6 +10,12 @@ const app = express();
 
 app.use(express.json({ limit: '1mb' }));
 
+// Request logging
+app.use((req, _res, next) => {
+  console.log(`[request] ${req.method} ${req.path}`);
+  next();
+});
+
 // Routes
 app.use(healthRouter);
 app.use(reviewRouter);
@@ -34,6 +40,7 @@ const ERROR_STATUS_MAP = {
 app.use((err, _req, res, _next) => {
   const status = ERROR_STATUS_MAP[err.code] ?? 500;
   console.error(`[error] ${err.code ?? 'UNKNOWN'} (${status}): ${err.message}`);
+  if (status >= 500) console.error(err.stack);
   res.status(status).json({
     error: err.message || 'Internal server error',
     code: err.code || 'INTERNAL_ERROR',

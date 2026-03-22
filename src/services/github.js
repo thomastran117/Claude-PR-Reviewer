@@ -7,7 +7,10 @@ const { loadRuntimeConfig } = require('../config');
 let _octokit = null;
 function getOctokit() {
   if (!_octokit) {
-    const { appId, privateKey, installationId } = loadRuntimeConfig();
+    const cfg = loadRuntimeConfig();
+    if (cfg.error) throw makeError('GITHUB_AUTH', `Config error: ${cfg.error}`);
+    const { appId, privateKey, installationId } = cfg;
+    console.log(`[github] initialising app auth appId=${appId} installationId=${installationId} privateKeyLength=${privateKey?.length ?? 0}`);
     _octokit = new Octokit({
       authStrategy: createAppAuth,
       auth: { appId, privateKey, installationId },
@@ -38,8 +41,10 @@ function makeError(code, message) {
 
 function wrapOctokitError(err) {
   const status = err.status;
+  console.error(`[github] API error status=${status ?? 'none'} message=${err.message}`);
+  if (err.response?.data) console.error(`[github] response body:`, JSON.stringify(err.response.data));
   if (status === 404) return makeError('NOT_FOUND', 'PR not found');
-  if (status === 401 || status === 403) return makeError('GITHUB_AUTH', 'GitHub token invalid or insufficient permissions');
+  if (status === 401 || status === 403) return makeError('GITHUB_AUTH', `GitHub App auth failed (${status}): ${err.message}`);
   if (status === 422) return makeError('GITHUB_VALIDATION', `GitHub validation error: ${err.message}`);
   if (status === 429) return makeError('RATE_LIMITED', 'GitHub API rate limit exceeded');
   if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND' || err.name === 'NetworkError') {
