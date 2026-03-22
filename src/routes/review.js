@@ -77,7 +77,7 @@ router.post('/api/review', auth, async (req, res, next) => {
     if (shouldPostComment) {
       console.log(`[review] posting comment to ${pr}`);
       await githubService.deletePreviousBotComments(owner, repo, pull_number);
-      const result = await githubService.postReview(owner, repo, pull_number, reviewText, inlineComments);
+      const result = await githubService.postReview(owner, repo, pull_number, prData.headSha, reviewText, inlineComments);
       commentPosted = true;
       reviewId = result.review_id;
       inlineCommentsPosted = result.inline_comments_posted;

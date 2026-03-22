@@ -177,7 +177,7 @@ async function deletePreviousBotComments(owner, repo, pull_number) {
   return deleted;
 }
 
-async function postReview(owner, repo, pull_number, reviewText, inlineComments) {
+async function postReview(owner, repo, pull_number, headSha, reviewText, inlineComments) {
   // Truncate review text if needed
   let body = reviewText;
   if (body.length > MAX_COMMENT_CHARS) {
@@ -185,15 +185,8 @@ async function postReview(owner, repo, pull_number, reviewText, inlineComments) 
   }
   body = `${MARKER}\n${body}${DISCLAIMER}`;
 
-  // Map inline comments to GitHub's shape
-  const comments = inlineComments.map(c => ({
-    path: c.path,
-    line: c.line,
-    side: 'RIGHT',
-    body: c.body,
-  }));
-
-  // Try with inline comments first; fall back to summary only on validation error
+  // Post the summary review body
+  let reviewId;
   try {
     const { data } = await getOctokit().pulls.createReview({
       owner,
@@ -201,27 +194,33 @@ async function postReview(owner, repo, pull_number, reviewText, inlineComments) 
       pull_number,
       body,
       event: 'COMMENT',
-      comments: comments.length > 0 ? comments : undefined,
     });
-    return { review_id: data.id, inline_comments_posted: comments.length };
+    reviewId = data.id;
   } catch (err) {
-    if (err.status === 422 && comments.length > 0) {
-      console.warn('[github] Inline comments rejected (invalid line positions), retrying without them');
-      try {
-        const { data } = await getOctokit().pulls.createReview({
-          owner,
-          repo,
-          pull_number,
-          body,
-          event: 'COMMENT',
-        });
-        return { review_id: data.id, inline_comments_posted: 0 };
-      } catch (err2) {
-        throw wrapOctokitError(err2);
-      }
-    }
     throw wrapOctokitError(err);
   }
+
+  // Post each inline comment individually so one bad line doesn't block the rest
+  let posted = 0;
+  for (const c of inlineComments) {
+    try {
+      await getOctokit().pulls.createReviewComment({
+        owner,
+        repo,
+        pull_number,
+        commit_id: headSha,
+        path: c.path,
+        line: c.line,
+        side: 'RIGHT',
+        body: c.body,
+      });
+      posted++;
+    } catch (err) {
+      console.warn(`[github] Skipping inline comment on ${c.path}:${c.line} — ${err.message}`);
+    }
+  }
+
+  return { review_id: reviewId, inline_comments_posted: posted };
 }
 
 module.exports = { getPRData, deletePreviousBotComments, postReview };
