@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const SYSTEM_PROMPT = fs.readFileSync(
-  path.join(__dirname, '../../prompts/system.md'),
+  path.join(__dirname, '../../prompts/event.md'),
   'utf8'
 );
 
