@@ -16,18 +16,18 @@ app.use(reviewRouter);
 
 // Global error handler
 const ERROR_STATUS_MAP = {
+  VALIDATION: 400,
   NOT_FOUND: 404,
   DIFF_TOO_LARGE: 422,
+  ANTHROPIC_AUTH: 401,       // caller passed a bad Anthropic key
   RATE_LIMITED: 429,
   ANTHROPIC_RATE_LIMITED: 429,
-  GITHUB_AUTH: 502,
+  GITHUB_AUTH: 503,          // server's own GitHub token is misconfigured
   GITHUB_VALIDATION: 502,
   GITHUB_NETWORK: 502,
-  ANTHROPIC_AUTH: 502,
   ANTHROPIC_SERVER_ERROR: 502,
   ANTHROPIC_NETWORK: 502,
   ANTHROPIC_UNEXPECTED: 502,
-  VALIDATION: 400,
 };
 
 // eslint-disable-next-line no-unused-vars
