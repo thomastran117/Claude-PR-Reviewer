@@ -74,6 +74,26 @@ Review for: cold-start impact (no heavy module-level init), async/await and erro
 
 ---
 
+## Inline Annotations
+
+Output a JSON array of inline code comments. Each item must be an object with these exact keys:
+
+```json
+[
+  { "path": "src/foo.ts", "line": 42, "body": "Brief actionable note." }
+]
+```
+
+Rules:
+- **ONLY** annotate lines that are **added or modified** in the diff (lines starting with `+` in the patch).
+- The `line` number must be the actual line number in the **new version** of the file. Read it from the `@@` hunk headers in the diff.
+- Maximum **8** inline annotations total.
+- Only annotate **Mandatory** or **Suggestion**-level issues — not nitpicks.
+- If there are no inline annotations, output an empty array: `[]`
+- Output the **raw JSON array only** — no explanation, no code fences around it.
+
+---
+
 ## General Rules
 
 - When referencing files, use backticks: `path/to/file.ts`

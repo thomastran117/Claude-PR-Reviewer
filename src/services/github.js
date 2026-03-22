@@ -178,8 +178,8 @@ async function deletePreviousBotComments(owner, repo, pull_number) {
 }
 
 async function postReview(owner, repo, pull_number, headSha, reviewText, inlineComments) {
-  // Truncate review text if needed
-  let body = reviewText;
+  // Strip inline annotations section — posted separately as individual comments
+  let body = reviewText.replace(/\n*## Inline Annotations[\s\S]*$/, '').trimEnd();
   if (body.length > MAX_COMMENT_CHARS) {
     body = body.slice(0, MAX_COMMENT_CHARS) + '\n\n_(Truncated due to length.)_';
   }
