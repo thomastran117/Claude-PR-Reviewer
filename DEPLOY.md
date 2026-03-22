@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - A [Railway](https://railway.app) account
-- A GitHub personal access token (PAT)
+- A GitHub App (see step 2 below for setup)
 - An Anthropic API key (given to callers — not stored on the server)
 
 ---
@@ -17,21 +17,37 @@
 
 ---
 
-## 2. Set environment variables
+## 2. Create a GitHub App
+
+Reviews are posted by a GitHub App, so they appear as `your-app[bot]` rather than your personal account.
+
+1. Go to **GitHub → Settings → Developer settings → GitHub Apps → New GitHub App**
+2. Fill in:
+   - **GitHub App name**: e.g. `MyOrg PR Reviewer`
+   - **Homepage URL**: your Railway URL (can be filled in after deploy)
+   - **Webhooks**: uncheck **Active** — not needed
+   - **Repository permissions**:
+     - `Pull requests`: Read & Write
+     - `Contents`: Read-only
+3. Click **Create GitHub App** and note the **App ID** shown on the settings page
+4. Scroll down → **Generate a private key** → a `.pem` file will download
+5. Go to the **Install App** tab → install it on the repositories you want reviewed
+6. After installing, the URL will contain the **Installation ID**: `github.com/settings/installations/XXXXXXX`
+
+---
+
+## 3. Set environment variables
 
 In Railway, go to your service → **Variables** tab and add:
 
 | Variable | Description |
 |---|---|
-| `GITHUB_TOKEN` | A GitHub PAT used to fetch PR data and post review comments |
+| `GITHUB_APP_ID` | Numeric App ID from step 2 |
+| `GITHUB_APP_PRIVATE_KEY` | Full contents of the downloaded `.pem` file |
+| `GITHUB_INSTALLATION_ID` | Numeric Installation ID from step 2 |
 | `ALLOWED_API_KEYS` | JSON map of API keys to usernames (see below) |
 
-**`GITHUB_TOKEN` permissions required:**
-
-- If you only need to fetch PR data (no `post_comment`): `pull_requests: read`, `contents: read`
-- If callers will use `post_comment: true`: also add `pull_requests: write`
-
-A fine-grained PAT scoped to specific repositories is recommended over a classic token.
+For `GITHUB_APP_PRIVATE_KEY`, paste the raw PEM content including the `-----BEGIN RSA PRIVATE KEY-----` header and footer. Railway preserves newlines correctly.
 
 **`ALLOWED_API_KEYS` format:**
 
@@ -45,7 +61,7 @@ Use a random string for each key (e.g. output of `openssl rand -hex 32`).
 
 ---
 
-## 3. Deploy
+## 4. Deploy
 
 Railway deploys automatically on every push to your default branch. To trigger a manual deploy, go to **Deployments** and click **Deploy Now**.
 
@@ -62,7 +78,7 @@ curl https://your-app-name.railway.app/health
 
 ---
 
-## 4. Set up the GitHub Actions workflow
+## 5. Set up the GitHub Actions workflow
 
 Add these three secrets to any repository where you want AI reviews (**Settings → Secrets and variables → Actions**):
 
@@ -143,10 +159,10 @@ The system prompt Claude uses is stored in [`prompts/system.md`](prompts/system.
 
 **`400 Bad Request`** — Missing `anthropic_api_key`, invalid `pr_url`, or missing `owner`/`repo`/`pull_number`.
 
-**`404 Not Found`** — The PR doesn't exist or `GITHUB_TOKEN` can't see it (check repo access).
+**`404 Not Found`** — The PR doesn't exist or the GitHub App can't see it. Ensure the app is installed on the repository.
 
 **`422 Unprocessable Entity`** — The diff is too large to review (> 90,000 chars). Consider breaking the PR into smaller pieces.
 
 **`502 Bad Gateway`** — An upstream call to GitHub or Anthropic failed. Check Railway logs for details (`railway logs`).
 
-**Reviews not posting to GitHub** — Ensure `GITHUB_TOKEN` has `pull_requests: write` and the PR is not from a fork owned by a user without write access.
+**Reviews not posting to GitHub** — Ensure the GitHub App has `Pull requests: Read & Write` permission and is installed on the target repository.
