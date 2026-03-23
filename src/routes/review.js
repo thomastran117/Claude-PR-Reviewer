@@ -5,6 +5,7 @@ const auth = require('../middleware/auth');
 const githubService = require('../services/github');
 const claudeService = require('../services/claude');
 const reviewService = require('../services/review');
+const cacheService = require('../services/cache');
 
 const router = Router();
 
@@ -50,26 +51,41 @@ router.post('/api/review', auth, async (req, res, next) => {
   console.log(`[review] start ${pr} user=${req.user.username} post_comment=${shouldPostComment}`);
 
   try {
-    // 1. Fetch PR data
+    // 1. Fetch PR data (always needed — gives us headSha for the cache key + fresh metadata)
     console.log(`[review] fetching PR data for ${pr}`);
     const prData = await githubService.getPRData(owner, repo, pull_number);
-    console.log(`[review] fetched ${prData.files_reviewed} files, ${prData.total_diff_chars} chars`);
+    console.log(`[review] fetched ${prData.files_reviewed} files, ${prData.total_diff_chars} chars sha=${prData.headSha}`);
 
-    // 2. Build prompt
-    const userMessage = reviewService.buildUserPrompt(prData);
+    // 2. Check cache — keyed by exact commit SHA so any new push is a cache miss
+    let reviewText, status, inlineComments;
+    let fromCache = false;
 
-    // 3. Call Claude
-    console.log(`[review] calling Claude`);
-    let reviewText = await claudeService.review(reviewService.SYSTEM_PROMPT, userMessage, anthropic_api_key);
-    if (!reviewText) reviewText = reviewService.FALLBACK_REVIEW;
-    console.log(`[review] Claude responded`);
+    const cached = cacheService.get(owner, repo, pull_number, prData.headSha);
+    if (cached) {
+      console.log(`[review] cache hit for ${pr} sha=${prData.headSha}`);
+      ({ reviewText, status, inlineComments } = cached);
+      fromCache = true;
+    } else {
+      // 3. Build prompt and call Claude
+      const userMessage = reviewService.buildUserPrompt(prData);
 
-    // 4. Parse results
-    const status = reviewService.parseStatus(reviewText);
-    const inlineComments = reviewService.parseInlineComments(reviewText);
+      console.log(`[review] calling Claude`);
+      reviewText = await claudeService.review(reviewService.SYSTEM_PROMPT, userMessage, anthropic_api_key);
+      if (!reviewText) reviewText = reviewService.FALLBACK_REVIEW;
+      console.log(`[review] Claude responded`);
+
+      // 4. Parse results
+      status = reviewService.parseStatus(reviewText);
+      inlineComments = reviewService.parseInlineComments(reviewText);
+
+      // 5. Store in cache
+      cacheService.set(owner, repo, pull_number, prData.headSha, { reviewText, status, inlineComments });
+      console.log(`[review] cached result (${cacheService.stats().size}/${cacheService.stats().maxEntries} entries)`);
+    }
+
     console.log(`[review] status=${status} inline_comments=${inlineComments.length}`);
 
-    // 5. Optionally post to GitHub
+    // 6. Optionally post to GitHub (always performed even on a cache hit — caller may want the comment)
     let commentPosted = false;
     let reviewId = null;
     let inlineCommentsPosted = 0;
@@ -84,7 +100,7 @@ router.post('/api/review', auth, async (req, res, next) => {
       console.log(`[review] posted review_id=${reviewId} inline_comments=${inlineCommentsPosted}`);
     }
 
-    console.log(`[review] done ${pr} duration=${Date.now() - startTime}ms`);
+    console.log(`[review] done ${pr} duration=${Date.now() - startTime}ms cached=${fromCache}`);
     res.json({
       status,
       review: reviewText,
@@ -100,6 +116,7 @@ router.post('/api/review', auth, async (req, res, next) => {
         inline_comments_posted: inlineCommentsPosted,
         username: req.user.username,
         duration_ms: Date.now() - startTime,
+        cached: fromCache,
       },
     });
   } catch (err) {
