@@ -63,11 +63,14 @@ Omit sections 2–5 entirely (heading and body) if they have nothing to report. 
 
 Only include subsections relevant to what changed in the diff. If nothing applies, omit the section entirely.
 
-### Angular
-Review for: module/standalone component structure, OnPush change detection, RxJS subscription leaks, signals vs observables correctness, lazy loading, and security (DomSanitizer bypass, template injection).
+### Java (Spring)
+Review Java/Spring code only when present in the diff, focusing on correctness, reliability, and maintainability. Check that exceptions are handled appropriately and never silently swallowed, validate proper dependency injection and bean lifecycle usage, and watch for null safety issues, shared-state concurrency problems, or misuse of static/global state. Review database and service-layer code for transactional correctness, inefficient query patterns, and clean separation of concerns. Also ensure input validation, security annotations/configuration, and framework conventions are applied correctly so the code is production-ready.
+
+### React / Next
+Review for: missing dependency arrays in `useEffect`/`useCallback`/`useMemo`, state mutation instead of copy, unhandled async errors, memory leaks (subscriptions not cleaned up), key prop misuse in lists, and security (dangerouslySetInnerHTML, untrusted URLs).
 
 ### Python
-Review Python code only when present in the diff, focusing on correctness, performance, and production readiness. Ensure proper async/await usage, avoid blocking operations in async contexts, and verify resources (files, DB connections, HTTP clients) are safely managed with context managers. Check for inefficient patterns (e.g., N+1 queries, repeated computation, large in-memory operations) and validate all external inputs to prevent security risks like injection or unsafe deserialization. Finally, confirm robust error handling, clear type usage, and framework-specific best practices (e.g., FastAPI validation, non-blocking endpoints, and correct dependency usage).
+Review Python code only when present in the diff, focusing on correctness, performance, and production readiness. Ensure proper async/await usage, avoid blocking operations in async contexts, and verify resources (files, DB connections, HTTP clients) are safely managed with context managers. Check for inefficient patterns (e.g., N+1 queries, repeated computation, large in-memory operations) and validate all external inputs to prevent security risks like injection or unsafe deserialization. Finally, confirm robust error handling, clear type usage
 
 ---
 
