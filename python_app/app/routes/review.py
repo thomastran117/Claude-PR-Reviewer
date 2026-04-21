@@ -8,7 +8,7 @@ import logging
 from typing import Dict, Any, Optional
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.middleware.auth import authenticate_user
 from app.services.github import github_service, GitHubServiceError
@@ -32,29 +32,35 @@ class ReviewRequest(BaseModel):
     pull_number: Optional[int] = Field(None, description="Pull request number")
     post_comment: Optional[bool] = Field(False, description="Whether to post comment to GitHub")
 
-    @validator('pr_url', 'owner', 'repo', pre=True, always=True)
-    def validate_pr_params(cls, v, values, field):
+    @model_validator(mode='after')
+    def validate_pr_params(self):
         """Validate PR parameters - either pr_url or owner/repo/pull_number must be provided"""
-        if field.name == 'pr_url':
-            if v is None:
-                # Check if owner/repo/pull_number are provided
-                owner = values.get('owner')
-                repo = values.get('repo')
-                pull_number = values.get('pull_number')
-                if not all([owner, repo, pull_number is not None]):
-                    raise ValueError('Must provide pr_url OR owner + repo + pull_number')
-            else:
-                # Validate pr_url format
-                match = PR_URL_REGEX.match(str(v))
-                if not match:
-                    raise ValueError('Invalid pr_url format. Expected: https://github.com/owner/repo/pull/123')
-        elif field.name in ['owner', 'repo'] and v is not None:
-            if not str(v).strip():
-                raise ValueError(f'{field.name} must be a non-empty string')
-        elif field.name == 'pull_number' and v is not None:
-            if not isinstance(v, int) or v <= 0:
-                raise ValueError('pull_number must be a positive integer')
+        if self.pr_url is None:
+            # Check if owner/repo/pull_number are provided
+            if not all([self.owner, self.repo, self.pull_number is not None]):
+                raise ValueError('Must provide pr_url OR owner + repo + pull_number')
+        else:
+            # Validate pr_url format
+            match = PR_URL_REGEX.match(str(self.pr_url))
+            if not match:
+                raise ValueError('Invalid pr_url format. Expected: https://github.com/owner/repo/pull/123')
 
+        # Validate individual fields
+        if self.owner is not None and not str(self.owner).strip():
+            raise ValueError('owner must be a non-empty string')
+        if self.repo is not None and not str(self.repo).strip():
+            raise ValueError('repo must be a non-empty string')
+        if self.pull_number is not None and (not isinstance(self.pull_number, int) or self.pull_number <= 0):
+            raise ValueError('pull_number must be a positive integer')
+
+        return self
+
+    @field_validator('anthropic_api_key')
+    @classmethod
+    def validate_anthropic_api_key(cls, v):
+        """Validate anthropic_api_key is not empty"""
+        if not v or not str(v).strip():
+            raise ValueError('anthropic_api_key must be a non-empty string')
         return v
 
 @router.post("/api/review")

@@ -8,7 +8,7 @@ from typing import Dict, Any, List
 
 # System prompt - read from file
 PROMPTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'prompts')
-SYSTEM_PROMPT_FILE = os.path.join(PROMPTS_DIR, 'event.md')
+SYSTEM_PROMPT_FILE = os.path.join(PROMPTS_DIR, 'shop.md')
 
 def _load_system_prompt() -> str:
     """Load system prompt from file"""
