@@ -4,6 +4,7 @@ GitHub service for PR data fetching and commenting
 
 import logging
 import re
+from pathlib import PurePosixPath
 from typing import Dict, Any, List, Optional, Set, Tuple
 from github import Github, GithubIntegration
 from starlette.concurrency import run_in_threadpool
@@ -20,6 +21,25 @@ MAX_FILE_CONTENT_SIZE = 100_000
 MAX_FILE_LINES = 500
 MAX_COMMENT_CHARS = 60_000
 MAX_INLINE_COMMENTS = 8
+MAX_CONTEXT_FILES = 12
+MAX_CONTEXT_FILE_CHARS = 12_000
+MAX_CONTEXT_TOTAL_CHARS = 40_000
+
+CONFIG_CONTEXT_CANDIDATES = [
+    "package.json",
+    "pyproject.toml",
+    "requirements.txt",
+    "setup.py",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "Dockerfile",
+    "docker-compose.yml",
+    "tsconfig.json",
+    "angular.json",
+    ".github/workflows/ci.yml",
+    ".github/workflows/test.yml",
+]
 
 MARKER = '<!-- CLAUDE_PR_REVIEW -->'
 INLINE_MARKER_PREFIX = '<!-- CLAUDE_PR_INLINE_REVIEW:'
@@ -113,6 +133,7 @@ class GitHubService:
                 "files_truncated": 0,
                 "files": [],
                 "commentable_lines": {},
+                "context_files": [],
                 "diffSummary": ""
             }
 
@@ -178,11 +199,59 @@ class GitHubService:
             pr_data["total_diff_chars"] = total_chars
             pr_data["files_truncated"] = files_truncated
             pr_data["diffSummary"] = "\n".join(files_summary)
+            pr_data["context_files"] = self._collect_context_files(repository, pr, pr_data["files"])
 
             return pr_data
 
         except Exception as e:
             raise self._wrap_github_error(e)
+
+    def _collect_context_files(self, repository, pr, changed_files: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+        """Fetch small config and related test files to ground the review."""
+        changed_filenames = {file_data["filename"] for file_data in changed_files}
+        candidates = []
+
+        for path in CONFIG_CONTEXT_CANDIDATES:
+            candidates.append((path, "project configuration"))
+
+        for file_data in changed_files:
+            for path in related_context_candidates(file_data["filename"]):
+                candidates.append((path, "related test or sibling context"))
+
+        context_files = []
+        seen: Set[str] = set()
+        total_chars = 0
+
+        for path, reason in candidates:
+            if path in seen or path in changed_filenames:
+                continue
+            seen.add(path)
+
+            try:
+                content_file = repository.get_contents(path, ref=pr.head.sha)
+                if isinstance(content_file, list) or not hasattr(content_file, "decoded_content"):
+                    continue
+
+                content = content_file.decoded_content.decode("utf-8", errors="replace")
+                if len(content) > MAX_CONTEXT_FILE_CHARS:
+                    content = content[:MAX_CONTEXT_FILE_CHARS] + "\n...(context truncated)"
+
+                if total_chars + len(content) > MAX_CONTEXT_TOTAL_CHARS:
+                    break
+
+                context_files.append({
+                    "filename": path,
+                    "reason": reason,
+                    "content": content,
+                })
+                total_chars += len(content)
+
+                if len(context_files) >= MAX_CONTEXT_FILES:
+                    break
+            except Exception:
+                continue
+
+        return context_files
 
     async def delete_previous_bot_comments(self, owner: str, repo: str, pull_number: int):
         """Delete previous bot comments from the PR"""
@@ -277,29 +346,35 @@ class GitHubService:
 
     def _post_inline_comments(self, pr, head_sha: str, inline_comments: List[Dict[str, Any]],
                               commentable_lines: Dict[str, Set[int]]) -> int:
-        """Post model annotations only when they point at added diff lines."""
-        posted = 0
+        """Post validated annotations as one grouped GitHub review."""
         existing_comment_keys = self._existing_inline_comment_keys(pr, head_sha)
+        review_comments = []
 
         for comment in self._valid_inline_comments(inline_comments, commentable_lines):
             comment_key = (comment["path"], comment["line"])
             if comment_key in existing_comment_keys:
                 continue
 
-            try:
-                body = f"{comment['body']}\n\n{INLINE_MARKER_PREFIX}{head_sha} -->"
-                pr.create_review_comment(
-                    body=body,
-                    commit=head_sha,
-                    path=comment["path"],
-                    line=comment["line"],
-                    side="RIGHT",
-                )
-                posted += 1
-            except Exception as e:
-                logger.warning(f"Could not post inline comment for {comment['path']}:{comment['line']}: {e}")
+            review_comments.append({
+                "body": f"{comment['body']}\n\n{INLINE_MARKER_PREFIX}{head_sha} -->",
+                "path": comment["path"],
+                "line": comment["line"],
+                "side": "RIGHT",
+            })
 
-        return posted
+        if not review_comments:
+            return 0
+
+        try:
+            pr.create_review(
+                body="Inline annotations from Claude PR Review.",
+                event="COMMENT",
+                comments=review_comments,
+            )
+            return len(review_comments)
+        except Exception as e:
+            logger.warning(f"Could not post grouped inline review: {e}")
+            return 0
 
     def _existing_inline_comment_keys(self, pr, head_sha: str) -> Set[Tuple[str, int]]:
         """Find inline comments this service already posted for the same head SHA."""
@@ -370,6 +445,39 @@ def extract_added_lines(patch: str) -> Set[int]:
             current_line += 1
 
     return added_lines
+
+def related_context_candidates(filename: str) -> List[str]:
+    """Return likely test/spec paths for a changed source file."""
+    path = PurePosixPath(filename)
+    if not path.suffix:
+        return []
+
+    stem = path.stem
+    suffix = path.suffix
+    parent = "" if str(path.parent) == "." else str(path.parent)
+
+    candidates = [
+        _join_posix(parent, f"test_{stem}{suffix}"),
+        _join_posix(parent, f"{stem}_test{suffix}"),
+        _join_posix(parent, f"{stem}.test{suffix}"),
+        _join_posix(parent, f"{stem}.spec{suffix}"),
+        _join_posix(parent, "__tests__", path.name),
+        _join_posix("tests", f"test_{stem}{suffix}"),
+        _join_posix("tests", f"{stem}_test{suffix}"),
+        _join_posix("test", f"{stem}_test{suffix}"),
+        _join_posix("src", "test", f"{stem}_test{suffix}"),
+    ]
+
+    if suffix == ".cs":
+        candidates.extend([
+            _join_posix(parent, f"{stem}Tests.cs"),
+            _join_posix("tests", f"{stem}Tests.cs"),
+        ])
+
+    return [candidate for candidate in candidates if candidate and candidate != filename]
+
+def _join_posix(*parts: str) -> str:
+    return "/".join(part.strip("/") for part in parts if part)
 
 # Global service instance
 github_service = GitHubService()
