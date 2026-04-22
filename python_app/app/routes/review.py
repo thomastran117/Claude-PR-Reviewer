@@ -2,23 +2,25 @@
 Review API route
 """
 
+import asyncio
 import re
 import time
 import logging
 from typing import Dict, Any, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.middleware.auth import authenticate_user
 from app.services.github import github_service, GitHubServiceError
 from app.services.claude import review as claude_review, ClaudeServiceError
-from app.services.review import build_user_prompt, parse_status, parse_inline_comments, FALLBACK_REVIEW
+from app.services.review import SYSTEM_PROMPT, build_user_prompt, parse_status, parse_inline_comments, FALLBACK_REVIEW
 from app.services.cache import cache_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+_review_locks: Dict[str, asyncio.Lock] = {}
 
 # Regex for PR URL validation
 PR_URL_REGEX = re.compile(r'github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)')
@@ -66,7 +68,7 @@ class ReviewRequest(BaseModel):
 @router.post("/api/review")
 async def review_pr(
     request: ReviewRequest,
-    user: Dict[str, str] = authenticate_user
+    user: Dict[str, str] = Depends(authenticate_user)
 ) -> Dict[str, Any]:
     """
     Review a GitHub pull request using Claude AI
@@ -104,40 +106,46 @@ async def review_pr(
         inline_comments: list
         from_cache = False
 
-        cached = cache_service.get(owner, repo, pull_number, pr_data["headSha"])
-        if cached:
-            logger.info(f"[review] cache hit for {pr} sha={pr_data['headSha']}")
-            review_text = cached["reviewText"]
-            review_status = cached["status"]
-            inline_comments = cached["inlineComments"]
-            from_cache = True
-        else:
-            # 3. Build prompt and call Claude
-            user_message = build_user_prompt(pr_data)
+        lock_key = f"{owner}/{repo}/{pull_number}/{pr_data['headSha']}"
+        lock = _review_locks.setdefault(lock_key, asyncio.Lock())
+        try:
+            async with lock:
+                cached = cache_service.get(owner, repo, pull_number, pr_data["headSha"])
+                if cached:
+                    logger.info(f"[review] cache hit for {pr} sha={pr_data['headSha']}")
+                    review_text = cached["reviewText"]
+                    review_status = cached["status"]
+                    inline_comments = cached["inlineComments"]
+                    from_cache = True
+                else:
+                    # 3. Build prompt and call Claude
+                    user_message = build_user_prompt(pr_data)
 
-            logger.info("[review] calling Claude")
-            review_text = await claude_review(
-                system_prompt=SYSTEM_PROMPT,
-                user_message=user_message,
-                anthropic_api_key=request.anthropic_api_key
-            )
+                    logger.info("[review] calling Claude")
+                    review_text = await claude_review(
+                        system_prompt=SYSTEM_PROMPT,
+                        user_message=user_message,
+                        anthropic_api_key=request.anthropic_api_key
+                    )
 
-            if not review_text:
-                review_text = FALLBACK_REVIEW
+                    if not review_text:
+                        review_text = FALLBACK_REVIEW
 
-            logger.info("[review] Claude responded")
+                    logger.info("[review] Claude responded")
 
-            # 4. Parse results
-            review_status = parse_status(review_text)
-            inline_comments = parse_inline_comments(review_text)
+                    # 4. Parse results
+                    review_status = parse_status(review_text)
+                    inline_comments = parse_inline_comments(review_text)
 
-            # 5. Store in cache
-            cache_service.set(owner, repo, pull_number, pr_data["headSha"], {
-                "reviewText": review_text,
-                "status": review_status,
-                "inlineComments": inline_comments
-            })
-            logger.info(f"[review] cached result ({cache_service.stats()['size']}/{cache_service.stats()['maxEntries']} entries)")
+                    # 5. Store in cache
+                    cache_service.set(owner, repo, pull_number, pr_data["headSha"], {
+                        "reviewText": review_text,
+                        "status": review_status,
+                        "inlineComments": inline_comments
+                    })
+                    logger.info(f"[review] cached result ({cache_service.stats()['size']}/{cache_service.stats()['maxEntries']} entries)")
+        finally:
+            _review_locks.pop(lock_key, None)
 
         logger.info(f"[review] status={review_status} inline_comments={len(inline_comments)}")
 
@@ -148,7 +156,6 @@ async def review_pr(
 
         if request.post_comment:
             logger.info(f"[review] posting comment to {pr}")
-            await github_service.delete_previous_bot_comments(owner, repo, pull_number)
             result = await github_service.post_review(
                 owner, repo, pull_number, pr_data["headSha"],
                 review_text, inline_comments

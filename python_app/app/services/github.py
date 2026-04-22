@@ -2,12 +2,10 @@
 GitHub service for PR data fetching and commenting
 """
 
-import re
 import logging
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 from github import Github, GithubIntegration
-from github.PullRequest import PullRequest
-from github.Repository import Repository
+from starlette.concurrency import run_in_threadpool
 
 from app.config import RuntimeConfig
 
@@ -85,6 +83,15 @@ class GitHubService:
         Returns:
             Dict containing PR information and file changes
         """
+        try:
+            return await run_in_threadpool(self._get_pr_data_sync, owner, repo, pull_number)
+        except GitHubServiceError:
+            raise
+        except Exception as e:
+            raise self._wrap_github_error(e)
+
+    def _get_pr_data_sync(self, owner: str, repo: str, pull_number: int) -> Dict[str, Any]:
+        """Blocking GitHub PR fetch implementation."""
         try:
             github_client = self._get_github_client()
             repository = github_client.get_repo(f"{owner}/{repo}")
@@ -172,13 +179,17 @@ class GitHubService:
 
     async def delete_previous_bot_comments(self, owner: str, repo: str, pull_number: int):
         """Delete previous bot comments from the PR"""
+        await run_in_threadpool(self._delete_previous_bot_comments_sync, owner, repo, pull_number)
+
+    def _delete_previous_bot_comments_sync(self, owner: str, repo: str, pull_number: int):
+        """Blocking implementation for deleting prior marker comments."""
         try:
             github_client = self._get_github_client()
             repository = github_client.get_repo(f"{owner}/{repo}")
-            pr = repository.get_pull(pull_number)
+            issue = repository.get_issue(pull_number)
 
             # Get existing comments
-            comments = list(pr.get_issue_comments())
+            comments = list(issue.get_comments())
             for comment in comments:
                 if comment.body and MARKER in comment.body:
                     comment.delete()
@@ -196,32 +207,61 @@ class GitHubService:
             Dict with review_id and inline_comments_posted count
         """
         try:
+            return await run_in_threadpool(
+                self._post_review_sync,
+                owner,
+                repo,
+                pull_number,
+                head_sha,
+                review_text,
+                inline_comments,
+            )
+        except GitHubServiceError:
+            raise
+        except Exception as e:
+            raise self._wrap_github_error(e)
+
+    def _post_review_sync(self, owner: str, repo: str, pull_number: int, head_sha: str,
+                          review_text: str, inline_comments: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Blocking GitHub comment implementation."""
+        try:
             github_client = self._get_github_client()
             repository = github_client.get_repo(f"{owner}/{repo}")
-            pr = repository.get_pull(pull_number)
+            issue = repository.get_issue(pull_number)
 
-            # Prepare review body
-            body = review_text
-            if len(body) > MAX_COMMENT_CHARS:
-                body = body[:MAX_COMMENT_CHARS - len(DISCLAIMER)] + "\n\n_(Review truncated)_"
+            body = self._build_review_body(review_text, head_sha)
 
-            body += DISCLAIMER
-            body += f"\n\n{MARKER}"
+            for comment in issue.get_comments():
+                if comment.body and MARKER in comment.body:
+                    comment.edit(body)
+                    logger.info(f"Updated previous bot comment {comment.id}")
+                    return {
+                        "review_id": comment.id,
+                        "inline_comments_posted": 0,
+                        "updated_existing": True,
+                    }
 
-            # Create review
-            review = pr.create_review(
-                body=body,
-                event="COMMENT",
-                comments=[]  # We'll handle inline comments separately if needed
-            )
+            comment = issue.create_comment(body)
 
             return {
-                "review_id": review.id,
-                "inline_comments_posted": 0  # Inline comments not implemented in this version
+                "review_id": comment.id,
+                "inline_comments_posted": 0,  # Inline comments not implemented in this version
+                "updated_existing": False,
             }
 
         except Exception as e:
             raise self._wrap_github_error(e)
+
+    def _build_review_body(self, review_text: str, head_sha: str) -> str:
+        """Build a GitHub-safe summary comment body."""
+        suffix = f"{DISCLAIMER}\n\nReviewed head SHA: `{head_sha}`\n\n{MARKER}"
+        truncation_note = "\n\n_(Review truncated)_"
+
+        if len(review_text) + len(suffix) > MAX_COMMENT_CHARS:
+            available = MAX_COMMENT_CHARS - len(suffix) - len(truncation_note)
+            review_text = review_text[:max(0, available)] + truncation_note
+
+        return f"{review_text}{suffix}"
 
 # Global service instance
 github_service = GitHubService()
