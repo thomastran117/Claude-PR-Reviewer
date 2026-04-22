@@ -14,3 +14,11 @@ async def health_check():
         "status": "ok",
         "version": Config.VERSION
     }
+
+@router.get("/")
+async def index_check():
+    """Health check endpoint"""
+    return {
+        "status": "ok",
+        "version": Config.VERSION
+    }
