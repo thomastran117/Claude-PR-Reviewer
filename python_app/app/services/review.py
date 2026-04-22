@@ -4,6 +4,8 @@ Review service for building prompts and parsing responses
 
 import os
 import re
+import json
+import hashlib
 from typing import Dict, Any, List
 
 # System prompt - read from file
@@ -96,6 +98,7 @@ Omit sections 2–5 entirely (heading and body) if they have nothing to report. 
 """
 
 SYSTEM_PROMPT = _load_system_prompt()
+SYSTEM_PROMPT_HASH = hashlib.sha256(SYSTEM_PROMPT.encode('utf-8')).hexdigest()[:12]
 
 FALLBACK_REVIEW = """STATUS: OK
 
@@ -145,6 +148,14 @@ Changed files (showing up to 30):
 
 {pr_data["diffSummary"]}"""
 
+    files_with_patches = [f for f in pr_data["files"] if f.get("patch")]
+    if files_with_patches:
+        prompt += "\n\n---\n## Diff Patches\n"
+        for file_data in files_with_patches:
+            filename = file_data["filename"]
+            patch = file_data["patch"]
+            prompt += f"\n### {filename}\n```diff\n{patch}\n```\n"
+
     files_with_content = [f for f in pr_data["files"] if f.get("fullContent")]
     if files_with_content:
         prompt += "\n\n---\n## Full File Contents\n"
@@ -188,15 +199,44 @@ def parse_inline_comments(review_text: str) -> List[Dict[str, Any]]:
 
     # Try to parse as JSON
     try:
-        import json
         # Remove any markdown formatting that might interfere
         annotations_text = re.sub(r'```\w*\n?', '', annotations_text)
         annotations_text = annotations_text.strip()
 
         if annotations_text.startswith('[') and annotations_text.endswith(']'):
-            return json.loads(annotations_text)
+            parsed = json.loads(annotations_text)
+            return normalize_inline_comments(parsed)
     except (json.JSONDecodeError, ValueError):
         pass
 
     # If JSON parsing fails, return empty list
     return []
+
+def normalize_inline_comments(raw_comments: Any) -> List[Dict[str, Any]]:
+    """Normalize model annotations to GitHub's path/line/body shape."""
+    if not isinstance(raw_comments, list):
+        return []
+
+    comments = []
+    for item in raw_comments[:8]:
+        if not isinstance(item, dict):
+            continue
+
+        path = item.get("path") or item.get("file")
+        line = item.get("line")
+        body = item.get("body") or item.get("message")
+
+        if not isinstance(path, str) or not path.strip():
+            continue
+        if not isinstance(line, int) or line <= 0:
+            continue
+        if not isinstance(body, str) or not body.strip():
+            continue
+
+        comments.append({
+            "path": path.strip(),
+            "line": line,
+            "body": body.strip(),
+        })
+
+    return comments

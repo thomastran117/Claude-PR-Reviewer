@@ -5,6 +5,8 @@ Claude AI service for PR reviews
 import anthropic
 import asyncio
 
+REVIEW_MODEL = "claude-sonnet-4-20250514"
+
 class ClaudeServiceError(Exception):
     """Base exception for Claude service errors"""
     def __init__(self, code: str, message: str):
@@ -64,7 +66,7 @@ async def _create_message_with_retries(client, system_prompt: str, user_message:
     for attempt in range(max_attempts):
         try:
             return await client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=REVIEW_MODEL,
                 max_tokens=2048,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],

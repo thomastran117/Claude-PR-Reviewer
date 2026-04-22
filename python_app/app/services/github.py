@@ -3,7 +3,8 @@ GitHub service for PR data fetching and commenting
 """
 
 import logging
-from typing import Dict, Any, List, Optional
+import re
+from typing import Dict, Any, List, Optional, Set, Tuple
 from github import Github, GithubIntegration
 from starlette.concurrency import run_in_threadpool
 
@@ -18,8 +19,10 @@ MAX_TOTAL_CHARS = 90_000
 MAX_FILE_CONTENT_SIZE = 100_000
 MAX_FILE_LINES = 500
 MAX_COMMENT_CHARS = 60_000
+MAX_INLINE_COMMENTS = 8
 
 MARKER = '<!-- CLAUDE_PR_REVIEW -->'
+INLINE_MARKER_PREFIX = '<!-- CLAUDE_PR_INLINE_REVIEW:'
 DISCLAIMER = (
     '\n\n---\n'
     '### 🤖 AI Peer Review Disclaimer\n'
@@ -109,6 +112,7 @@ class GitHubService:
                 "total_diff_chars": 0,
                 "files_truncated": 0,
                 "files": [],
+                "commentable_lines": {},
                 "diffSummary": ""
             }
 
@@ -117,7 +121,7 @@ class GitHubService:
             files_summary = []
             total_chars = 0
             files_reviewed = 0
-            files_truncated = 0
+            files_truncated = max(0, len(files) - MAX_FILES)
 
             for file in files[:MAX_FILES]:
                 if file.status == "removed":
@@ -125,6 +129,7 @@ class GitHubService:
 
                 patch = file.patch or ""
                 patch_chars = len(patch)
+                commentable_lines = extract_added_lines(patch)
 
                 # Check size limits
                 if patch_chars > MAX_PATCH_CHARS:
@@ -158,10 +163,12 @@ class GitHubService:
                     "deletions": file.deletions,
                     "changes": file.changes,
                     "patch": patch,
+                    "commentableLines": sorted(commentable_lines),
                     "fullContent": full_content
                 }
 
                 pr_data["files"].append(file_data)
+                pr_data["commentable_lines"][file.filename] = commentable_lines
 
                 # Add to summary
                 summary_line = f"{file.filename} (+{file.additions} -{file.deletions})"
@@ -199,7 +206,8 @@ class GitHubService:
             logger.warning(f"Could not delete previous comments: {e}")
 
     async def post_review(self, owner: str, repo: str, pull_number: int, head_sha: str,
-                         review_text: str, inline_comments: List[Dict[str, Any]]) -> Dict[str, Any]:
+                         review_text: str, inline_comments: List[Dict[str, Any]],
+                         commentable_lines: Dict[str, Set[int]]) -> Dict[str, Any]:
         """
         Post review comments to GitHub PR
 
@@ -215,6 +223,7 @@ class GitHubService:
                 head_sha,
                 review_text,
                 inline_comments,
+                commentable_lines,
             )
         except GitHubServiceError:
             raise
@@ -222,14 +231,17 @@ class GitHubService:
             raise self._wrap_github_error(e)
 
     def _post_review_sync(self, owner: str, repo: str, pull_number: int, head_sha: str,
-                          review_text: str, inline_comments: List[Dict[str, Any]]) -> Dict[str, Any]:
+                          review_text: str, inline_comments: List[Dict[str, Any]],
+                          commentable_lines: Dict[str, Set[int]]) -> Dict[str, Any]:
         """Blocking GitHub comment implementation."""
         try:
             github_client = self._get_github_client()
             repository = github_client.get_repo(f"{owner}/{repo}")
+            pr = repository.get_pull(pull_number)
             issue = repository.get_issue(pull_number)
 
             body = self._build_review_body(review_text, head_sha)
+            posted_inline_count = self._post_inline_comments(pr, head_sha, inline_comments, commentable_lines)
 
             for comment in issue.get_comments():
                 if comment.body and MARKER in comment.body:
@@ -237,7 +249,7 @@ class GitHubService:
                     logger.info(f"Updated previous bot comment {comment.id}")
                     return {
                         "review_id": comment.id,
-                        "inline_comments_posted": 0,
+                        "inline_comments_posted": posted_inline_count,
                         "updated_existing": True,
                     }
 
@@ -245,7 +257,7 @@ class GitHubService:
 
             return {
                 "review_id": comment.id,
-                "inline_comments_posted": 0,  # Inline comments not implemented in this version
+                "inline_comments_posted": posted_inline_count,
                 "updated_existing": False,
             }
 
@@ -262,6 +274,102 @@ class GitHubService:
             review_text = review_text[:max(0, available)] + truncation_note
 
         return f"{review_text}{suffix}"
+
+    def _post_inline_comments(self, pr, head_sha: str, inline_comments: List[Dict[str, Any]],
+                              commentable_lines: Dict[str, Set[int]]) -> int:
+        """Post model annotations only when they point at added diff lines."""
+        posted = 0
+        existing_comment_keys = self._existing_inline_comment_keys(pr, head_sha)
+
+        for comment in self._valid_inline_comments(inline_comments, commentable_lines):
+            comment_key = (comment["path"], comment["line"])
+            if comment_key in existing_comment_keys:
+                continue
+
+            try:
+                body = f"{comment['body']}\n\n{INLINE_MARKER_PREFIX}{head_sha} -->"
+                pr.create_review_comment(
+                    body=body,
+                    commit=head_sha,
+                    path=comment["path"],
+                    line=comment["line"],
+                    side="RIGHT",
+                )
+                posted += 1
+            except Exception as e:
+                logger.warning(f"Could not post inline comment for {comment['path']}:{comment['line']}: {e}")
+
+        return posted
+
+    def _existing_inline_comment_keys(self, pr, head_sha: str) -> Set[Tuple[str, int]]:
+        """Find inline comments this service already posted for the same head SHA."""
+        existing: Set[Tuple[str, int]] = set()
+        marker = f"{INLINE_MARKER_PREFIX}{head_sha} -->"
+
+        try:
+            review_comments = pr.get_review_comments()
+        except Exception as e:
+            logger.warning(f"Could not fetch existing inline comments: {e}")
+            return existing
+
+        for comment in review_comments:
+            body = getattr(comment, "body", "") or ""
+            path = getattr(comment, "path", None)
+            line = getattr(comment, "line", None)
+
+            if marker in body and isinstance(path, str) and isinstance(line, int):
+                existing.add((path, line))
+
+        return existing
+
+    def _valid_inline_comments(self, inline_comments: List[Dict[str, Any]],
+                               commentable_lines: Dict[str, Set[int]]) -> List[Dict[str, Any]]:
+        """Keep only comments that target changed lines in the current diff."""
+        valid_comments = []
+        seen: Set[Tuple[str, int, str]] = set()
+
+        for comment in inline_comments[:MAX_INLINE_COMMENTS]:
+            path = comment.get("path")
+            line = comment.get("line")
+            body = comment.get("body")
+
+            if not isinstance(path, str) or not isinstance(line, int) or not isinstance(body, str):
+                continue
+            if line not in commentable_lines.get(path, set()):
+                continue
+
+            key = (path, line, body)
+            if key in seen:
+                continue
+
+            seen.add(key)
+            valid_comments.append({"path": path, "line": line, "body": body})
+
+        return valid_comments
+
+def extract_added_lines(patch: str) -> Set[int]:
+    """Return absolute new-file line numbers for added lines in a unified diff."""
+    added_lines: Set[int] = set()
+    current_line: Optional[int] = None
+
+    for raw_line in patch.splitlines():
+        hunk_match = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw_line)
+        if hunk_match:
+            current_line = int(hunk_match.group(1))
+            continue
+
+        if current_line is None:
+            continue
+
+        if raw_line.startswith("+") and not raw_line.startswith("+++"):
+            added_lines.add(current_line)
+            current_line += 1
+        elif raw_line.startswith("-") and not raw_line.startswith("---"):
+            continue
+        else:
+            current_line += 1
+
+    return added_lines
 
 # Global service instance
 github_service = GitHubService()
