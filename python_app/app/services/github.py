@@ -13,6 +13,10 @@ from app.config import RuntimeConfig
 
 logger = logging.getLogger(__name__)
 
+def github_print(message: str) -> None:
+    """Print GitHub service progress to stdout for hosted logs."""
+    print(f"[github] {message}", flush=True)
+
 # Constants
 MAX_FILES = 30
 MAX_PATCH_CHARS = 20_000
@@ -77,8 +81,12 @@ class GitHubService:
                 private_key=config.private_key,
             )
 
-            installation = integration.get_installation(config.installation_id)
-            self._github = installation.get_github_for_installation()
+            github_print(
+                f"initializing app auth app_id={config.app_id} "
+                f"installation_id={config.installation_id}"
+            )
+            self._github = integration.get_github_for_installation(config.installation_id)
+            github_print("GitHub app installation client initialized")
 
         return self._github
 

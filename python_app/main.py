@@ -83,13 +83,31 @@ async def log_requests(request: Request, call_next):
     start_time = asyncio.get_event_loop().time()
     console_log(f"[request] start method={request.method} path={request.url.path}")
     logger.info(f"[request] {request.method} {request.url.path}")
-    response = await call_next(request)
-    duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
-    console_log(
-        f"[request] done method={request.method} path={request.url.path} "
-        f"status={response.status_code} duration_ms={duration_ms}"
-    )
-    return response
+    try:
+        response = await call_next(request)
+        duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
+        console_log(
+            f"[request] done method={request.method} path={request.url.path} "
+            f"status={response.status_code} duration_ms={duration_ms}"
+        )
+        return response
+    except Exception as exc:
+        duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
+        error_code = getattr(exc, 'code', 'INTERNAL_ERROR')
+        status_code = ERROR_STATUS_MAP.get(error_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        console_log(
+            f"[request] error method={request.method} path={request.url.path} "
+            f"code={error_code} status={status_code} duration_ms={duration_ms} message={exc}"
+        )
+        logger.error(f"[request] error {error_code} ({status_code}): {exc}")
+
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "error": str(exc) or "Internal server error",
+                "code": error_code,
+            }
+        )
 
 # Include routers
 app.include_router(health_router)
