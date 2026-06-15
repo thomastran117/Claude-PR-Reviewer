@@ -5,7 +5,7 @@ Claude AI service for PR reviews
 import anthropic
 import asyncio
 
-REVIEW_MODEL = "claude-sonnet-4-20250514"
+REVIEW_MODEL = "claude-sonnet-4-6"
 
 class ClaudeServiceError(Exception):
     """Base exception for Claude service errors"""
